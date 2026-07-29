@@ -18,6 +18,21 @@ You can find the prebuilt binaries on [this download page][qwfwd-builds].
 
 None at the moment.
 
+## Default server
+
+Set `default_server` to let clients connect directly to QWFWD without configuring
+the `prx` userinfo key:
+
+```
+set net_ip 188.120.226.217
+set net_port 27500
+set default_server qwtf.net:27500
+```
+
+QWFWD establishes the connection to `default_server` through the proxy. When
+`default_server` is empty, clients without a `prx` key continue to receive the
+existing `prx userinfo key is not set` error.
+
 ## Building binaries
 
 ### Build from source with CMake

@@ -186,6 +186,7 @@ static void SVC_DirectConnect (void)
 	unsigned int i = FindChallengeForAddr(&net_from);
 
 	char userinfo[MAX_INFO_STRING], prx[MAX_INFO_KEY * 4 /* we allow huge size for prx */], *at;
+	qbool using_default_server = false;
 	peer_t *p = NULL;
 	int qport, port, challenge;
 	protocol_t proto;
@@ -247,15 +248,21 @@ static void SVC_DirectConnect (void)
 	Info_ValueForKey(userinfo, QWFWD_PRX_KEY, prx, sizeof(prx));
 	if (!prx[0])
 	{
-		if ( proto == pr_qw )
+		if (default_server->string[0])
+		{
+			strlcpy(prx, default_server->string, sizeof(prx));
+			using_default_server = true;
+		}
+		else if ( proto == pr_qw )
 		{
 			Netchan_OutOfBandPrint (net_from_socket, &net_from, "%c\n" QWFWD_PRX_KEY " userinfo key is not set\n", A2C_PRINT);
+			return; // no proxy or default server set
 		}
 		else
 		{
 			Netchan_OutOfBandPrint (net_from_socket, &net_from, "print\n" QWFWD_PRX_KEY " userinfo key is not set\n");
+			return; // no proxy or default server set
 		}
-		return; // no proxy set
 	}
 
 	// check chaining
@@ -282,7 +289,8 @@ static void SVC_DirectConnect (void)
 
 	if (port < 1)
 	{
-		Netchan_OutOfBandPrint (net_from_socket, &net_from, "%c\nport number in " QWFWD_PRX_KEY " userinfo key is invalid\n", A2C_PRINT);
+		Netchan_OutOfBandPrint (net_from_socket, &net_from, "%c\nport number in %s is invalid\n", A2C_PRINT,
+			using_default_server ? "default_server" : QWFWD_PRX_KEY " userinfo key");
 		return; // something wrong with port
 	}
 
