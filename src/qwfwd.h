@@ -155,6 +155,7 @@ typedef struct peer
 	int qport;						// qport
 	struct sockaddr_in from;		// client addr
 	struct sockaddr_in to;			// remote addr
+	int listener_socket;				// local socket used by this client
 	int s;							// socket, used for connection to remote host
 	peer_state_t ps;				// peer state
 	protocol_t	proto;				// which protocol we use
@@ -225,7 +226,7 @@ extern proxy_static_t ps;
 
 extern cvar_t *developer, *maxclients, *hostname;
 extern cvar_t *hostport, *countrycode, *city, *coords;
-extern cvar_t *default_server;
+extern cvar_t *default_server, *default_server_map;
 
 //
 // token.c
@@ -263,8 +264,8 @@ qbool			FS_SafePath(const char *in);
 
 extern	peer_t		*peers;
 
-peer_t		*FWD_peer_by_addr(struct sockaddr_in *from);
-peer_t		*FWD_peer_new(const char *remote_host, int remote_port, struct sockaddr_in *from, const char *userinfo, int qport, protocol_t proto, qbool link);
+peer_t		*FWD_peer_by_addr(struct sockaddr_in *from, int listener_socket);
+peer_t		*FWD_peer_new(const char *remote_host, int remote_port, struct sockaddr_in *from, int listener_socket, const char *userinfo, int qport, protocol_t proto, qbool link);
 void		FWD_update_peers(void);
 
 int			FWD_peers_count(void);
@@ -379,9 +380,19 @@ double			Sys_DoubleTime (void);
 // net.c
 //
 
-extern	cvar_t			*net_ip, *net_port;
+#define MAX_NET_LISTENERS 32
+
+typedef struct net_listener
+{
+	int socket;
+	int port;
+} net_listener_t;
+
+extern	cvar_t			*net_ip, *net_port, *net_ports;
 
 extern	int			net_socket;
+extern	net_listener_t	net_listeners[MAX_NET_LISTENERS];
+extern	int			net_listener_count;
 extern	struct sockaddr_in	net_from;
 extern	int			net_from_socket;
 extern	sizebuf_t		net_message;
@@ -390,6 +401,7 @@ int				NET_GetPacket(int s, sizebuf_t *msg);
 void				NET_SendPacket(int s, int length, const void *data, struct sockaddr_in *to);
 int				NET_UDP_OpenSocket(const char *ip, int port, qbool do_bind);
 qbool				NET_GetSockAddrIn_ByHostAndPort(struct sockaddr_in *address, const char *host, int port);
+int				NET_GetListenerPort(int socket);
 
 char				*NET_BaseAdrToString (struct sockaddr_in *a, char *buf, size_t bufsize);
 char				*NET_AdrToString (struct sockaddr_in *a, char *buf, size_t bufsize);

@@ -18,20 +18,40 @@ You can find the prebuilt binaries on [this download page][qwfwd-builds].
 
 None at the moment.
 
-## Default server
+## Default server and multiple listening ports
 
 Set `default_server` to let clients connect directly to QWFWD without configuring
-the `prx` userinfo key:
+the `prx` userinfo key. When the value does not include a port, QWFWD preserves
+the port on which the client connected:
 
-```
+```cfg
 set net_ip 188.120.226.217
-set net_port 27500
-set default_server qwtf.net:27500
+set net_ports "27500 27501"
+set default_server qwtf.net
 ```
 
-QWFWD establishes the connection to `default_server` through the proxy. When
-`default_server` is empty, clients without a `prx` key continue to receive the
-existing `prx userinfo key is not set` error.
+This configuration creates the following routes through QWFWD:
+
+```text
+188.120.226.217:27500 -> qwtf.net:27500
+188.120.226.217:27501 -> qwtf.net:27501
+```
+
+Use `default_server_map` to override individual ports:
+
+```cfg
+set default_server_map "27501=qwtf.net:27502"
+```
+
+The override routes `188.120.226.217:27501` to `qwtf.net:27502`. Multiple
+overrides can be separated by spaces. `net_ports` also accepts comma-separated
+ports and ranges such as `27500-27510`.
+
+The existing `net_port` setting remains supported when `net_ports` is empty.
+An explicit port in `default_server`, for example `qwtf.net:27500`, is used for
+every listening port without a map override. An explicit client `prx` value
+continues to take precedence. When neither `default_server` nor a matching map
+entry is configured, the existing `prx userinfo key is not set` error is returned.
 
 ## Building binaries
 

@@ -4,8 +4,11 @@
 
 cvar_t				*net_ip;
 cvar_t				*net_port;
+cvar_t				*net_ports;
 
 int					net_socket;
+net_listener_t		net_listeners[MAX_NET_LISTENERS];
+int					net_listener_count;
 struct sockaddr_in	net_from;
 int					net_from_socket;
 sizebuf_t			net_message;
@@ -162,6 +165,19 @@ qbool NET_GetSockAddrIn_ByHostAndPort(struct sockaddr_in *address, const char *h
 	return true;
 }
 
+int NET_GetListenerPort(int socket)
+{
+	int i;
+
+	for (i = 0; i < net_listener_count; i++)
+	{
+		if (net_listeners[i].socket == socket)
+			return net_listeners[i].port;
+	}
+
+	return 0;
+}
+
 //=============================================================================
 // return true if adresses equal
 qbool NET_CompareAddress(struct sockaddr_in *a, struct sockaddr_in *b)
@@ -266,10 +282,79 @@ void Netchan_OutOfBandPrint(int s, struct sockaddr_in *adr, const char *format, 
 NET_Init
 ====================
 */
+static int NET_ParsePortNumber(const char *value)
+{
+	char *end;
+	long port;
+
+	if (!value || !value[0])
+		return 0;
+
+	port = strtol(value, &end, 10);
+	if (*end || port < 1 || port > 65535)
+		return 0;
+
+	return (int)port;
+}
+
+static void NET_AddListenerPort(int port)
+{
+	int i;
+
+	for (i = 0; i < net_listener_count; i++)
+	{
+		if (net_listeners[i].port == port)
+			return;
+	}
+
+	if (net_listener_count >= MAX_NET_LISTENERS)
+		Sys_Error("NET_Init: too many listening ports (maximum %d)", MAX_NET_LISTENERS);
+
+	net_listeners[net_listener_count].socket = INVALID_SOCKET;
+	net_listeners[net_listener_count].port = port;
+	net_listener_count++;
+}
+
+static void NET_ParseListenerPorts(const char *value)
+{
+	char *ports, *token;
+
+	ports = Sys_strdup(value);
+	for (token = strtok(ports, " ,"); token; token = strtok(NULL, " ,"))
+	{
+		char *dash = strchr(token, '-');
+		int first, last, port;
+
+		if (dash)
+		{
+			if (strchr(dash + 1, '-'))
+				Sys_Error("NET_Init: invalid port range '%s'", token);
+
+			*dash = 0;
+			first = NET_ParsePortNumber(token);
+			last = NET_ParsePortNumber(dash + 1);
+			if (!first || !last || last < first)
+				Sys_Error("NET_Init: invalid port range '%s-%s'", token, dash + 1);
+
+			for (port = first; port <= last; port++)
+				NET_AddListenerPort(port);
+		}
+		else
+		{
+			port = NET_ParsePortNumber(token);
+			if (!port)
+				Sys_Error("NET_Init: invalid port '%s'", token);
+			NET_AddListenerPort(port);
+		}
+	}
+	Sys_free(ports);
+}
+
 void NET_Init (void)
 {
 	char *ip = (*ps.params.ip) ? ps.params.ip : "0.0.0.0";
 	char port[64] = {0};
+	int i;
 
 	snprintf(port, sizeof(port), "%d", 	ps.params.port ? ps.params.port : QWFWD_DEFAULT_PORT);
 
@@ -279,9 +364,15 @@ void NET_Init (void)
 		net_ip	 = Cvar_Get("net_ip",	  ip, CVAR_NOSET);
 
 	if (ps.params.port) // if cmd line - force it, so we have priority over cfg
+	{
 		net_port = Cvar_FullSet("net_port",	port, CVAR_NOSET);
+		net_ports = Cvar_FullSet("net_ports", "", CVAR_NOSET);
+	}
 	else
+	{
 		net_port = Cvar_Get("net_port",		port, CVAR_NOSET);
+		net_ports = Cvar_Get("net_ports",	"", CVAR_NOSET);
+	}
 
 #ifdef _WIN32
 	{
@@ -292,8 +383,27 @@ void NET_Init (void)
 	}
 #endif
 
-	if ((net_socket = NET_UDP_OpenSocket(net_ip->string, net_port->integer, true)) == INVALID_SOCKET)
-		Sys_Error("NET_Init: failed to initialize socket");
+	net_listener_count = 0;
+	memset(net_listeners, 0, sizeof(net_listeners));
+
+	if (net_ports->string[0])
+		NET_ParseListenerPorts(net_ports->string);
+	else
+		NET_AddListenerPort(net_port->integer);
+
+	if (!net_listener_count)
+		Sys_Error("NET_Init: no listening ports configured");
+
+	for (i = 0; i < net_listener_count; i++)
+	{
+		net_listeners[i].socket = NET_UDP_OpenSocket(net_ip->string, net_listeners[i].port, true);
+		if (net_listeners[i].socket == INVALID_SOCKET)
+			Sys_Error("NET_Init: failed to initialize socket on %s:%d", net_ip->string, net_listeners[i].port);
+	}
+
+	net_socket = net_listeners[0].socket;
+	snprintf(port, sizeof(port), "%d", net_listeners[0].port);
+	Cvar_ForceSet("net_port", port);
 
 	// init the message buffer
 	SZ_InitEx(&net_message, net_message_buffer, sizeof(net_message_buffer), false);

@@ -20,6 +20,7 @@ cvar_t *countrycode;
 cvar_t *city;
 cvar_t *coords;
 cvar_t *default_server;
+cvar_t *default_server_map;
 
 proxy_static_t ps;
 
@@ -134,6 +135,7 @@ DWORD WINAPI FWD_proc(void *lpParameter)
 	coords			= Cvar_Get("coords",		"", CVAR_SERVERINFO);
 
 	default_server	= Cvar_Get("default_server", "", 0);
+	default_server_map = Cvar_Get("default_server_map", "", 0);
 
 	// register basic commands
 	Cmd_AddCommand("quit", Cmd_Quit_f);
@@ -158,7 +160,11 @@ DWORD WINAPI FWD_proc(void *lpParameter)
 	Cmd_StuffCmds(argc, argv);
 	Cbuf_Execute();
 
-	Sys_Printf("qwfwd: ready to rock at %s:%d\n", net_ip->string, net_port->integer);
+	{
+		int i;
+		for (i = 0; i < net_listener_count; i++)
+			Sys_Printf("qwfwd: ready to rock at %s:%d\n", net_ip->string, net_listeners[i].port);
+	}
 
 	while(!ps.wanttoexit)
 	{

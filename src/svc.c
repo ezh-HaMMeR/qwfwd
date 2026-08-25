@@ -27,6 +27,7 @@ typedef struct
 	int						challenge;
 	time_t					time;
 	protocol_t				proto;
+	int						listener_socket;
 } challenge_t;
 
 static challenge_t		challenges[MAX_CHALLENGES];	// to prevent invalid IPs from connecting
@@ -38,7 +39,7 @@ static unsigned int FindChallengeForAddr(struct sockaddr_in *addr)
 
 	for (i = 0; i < MAX_CHALLENGES; i++)
 	{
-		if (NET_CompareAddress(addr, &challenges[i].adr))
+		if (challenges[i].listener_socket == net_from_socket && NET_CompareAddress(addr, &challenges[i].adr))
 		{
 			break; // found
 		}
@@ -96,6 +97,7 @@ static void SVC_GetChallenge ( protocol_t proto )
 		challenges[i].challenge = (rand() << 16) ^ rand();
 		challenges[i].adr		= net_from;
 		challenges[i].time		= time(NULL);
+		challenges[i].listener_socket = net_from_socket;
 	}
 
 	// overwrite proto in any case!
@@ -103,7 +105,7 @@ static void SVC_GetChallenge ( protocol_t proto )
 
 	if ( challenges[i].proto == pr_q3 )
 	{
-		peer_t *p = FWD_peer_by_addr( &net_from );
+		peer_t *p = FWD_peer_by_addr(&net_from, net_from_socket);
 		if ( p && p->ps == ps_connected )
 		{
 			Sys_DPrintf("challenge q3 overwrite trick!\n");
@@ -181,14 +183,50 @@ static qbool CheckUserinfo( char *userinfobuf, unsigned int bufsize, char *useri
 	return true;
 }
 
+static qbool SVC_GetDefaultServer(char *server, size_t server_size, int listener_port, const char **source)
+{
+	char map[MAX_COM_TOKEN];
+	char *entry;
+
+	strlcpy(map, default_server_map->string, sizeof(map));
+	for (entry = strtok(map, " ,"); entry; entry = strtok(NULL, " ,"))
+	{
+		char *equals = strchr(entry, '=');
+		char *end;
+		long port;
+
+		if (!equals || !equals[1])
+			continue;
+
+		*equals = 0;
+		port = strtol(entry, &end, 10);
+		if (*end || port < 1 || port > 65535 || port != listener_port)
+			continue;
+
+		strlcpy(server, equals + 1, server_size);
+		*source = "default_server_map";
+		return true;
+	}
+
+	if (default_server->string[0])
+	{
+		strlcpy(server, default_server->string, server_size);
+		*source = "default_server";
+		return true;
+	}
+
+	return false;
+}
+
 static void SVC_DirectConnect (void)
 {
 	unsigned int i = FindChallengeForAddr(&net_from);
 
 	char userinfo[MAX_INFO_STRING], prx[MAX_INFO_KEY * 4 /* we allow huge size for prx */], *at;
 	qbool using_default_server = false;
+	const char *default_source = NULL;
 	peer_t *p = NULL;
-	int qport, port, challenge;
+	int qport, port, challenge, listener_port;
 	protocol_t proto;
 
 	if ( i >= MAX_CHALLENGES )
@@ -248,9 +286,9 @@ static void SVC_DirectConnect (void)
 	Info_ValueForKey(userinfo, QWFWD_PRX_KEY, prx, sizeof(prx));
 	if (!prx[0])
 	{
-		if (default_server->string[0])
+		listener_port = NET_GetListenerPort(net_from_socket);
+		if (SVC_GetDefaultServer(prx, sizeof(prx), listener_port, &default_source))
 		{
-			strlcpy(prx, default_server->string, sizeof(prx));
 			using_default_server = true;
 		}
 		else if ( proto == pr_qw )
@@ -284,13 +322,13 @@ static void SVC_DirectConnect (void)
 	}
 	else
 	{
-		port = ( proto == pr_qw ) ? 27500 : 27960;
+		port = using_default_server ? NET_GetListenerPort(net_from_socket) : (( proto == pr_qw ) ? 27500 : 27960);
 	}
 
-	if (port < 1)
+	if (port < 1 || port > 65535)
 	{
 		Netchan_OutOfBandPrint (net_from_socket, &net_from, "%c\nport number in %s is invalid\n", A2C_PRINT,
-			using_default_server ? "default_server" : QWFWD_PRX_KEY " userinfo key");
+			using_default_server ? default_source : QWFWD_PRX_KEY " userinfo key");
 		return; // something wrong with port
 	}
 
@@ -300,7 +338,7 @@ static void SVC_DirectConnect (void)
 	// build a new connection
 
 	// this was new peer, lets register it then
-	if ((p = FWD_peer_new(prx, port, &net_from, userinfo, qport, proto, true)))
+	if ((p = FWD_peer_new(prx, port, &net_from, net_from_socket, userinfo, qport, proto, true)))
 	{
 		Sys_DPrintf("peer %s:%d added or reused\n", inet_ntoa(net_from.sin_addr), (int)ntohs(net_from.sin_port));
 	}

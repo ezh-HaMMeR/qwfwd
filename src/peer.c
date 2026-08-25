@@ -7,13 +7,13 @@
 peer_t *peers = NULL;
 static int userid = 0;
 
-peer_t	*FWD_peer_by_addr(struct sockaddr_in *from)
+peer_t	*FWD_peer_by_addr(struct sockaddr_in *from, int listener_socket)
 {
 	peer_t *p;
 
 	for (p = peers; p; p = p->next)
 	{
-		if (NET_CompareAddress(&p->from, from))
+		if (p->listener_socket == listener_socket && NET_CompareAddress(&p->from, from))
 			return p;
 	}
 
@@ -31,7 +31,7 @@ static int parse_color(const char *userinfo, const char *key)
 	return (color < 0) ? 0 : ((color > 16) ? 16 : color);
 }
 
-peer_t	*FWD_peer_new(const char *remote_host, int remote_port, struct sockaddr_in *from, const char *userinfo, int qport, protocol_t proto, qbool link)
+peer_t	*FWD_peer_new(const char *remote_host, int remote_port, struct sockaddr_in *from, int listener_socket, const char *userinfo, int qport, protocol_t proto, qbool link)
 {
 	peer_t *p;
 	struct sockaddr_in to;
@@ -49,7 +49,7 @@ peer_t	*FWD_peer_new(const char *remote_host, int remote_port, struct sockaddr_i
 		return NULL;
 
 	// we probably already have such peer, reuse it then
-	p = FWD_peer_by_addr( from );
+	p = FWD_peer_by_addr(from, listener_socket);
 
 	// next check for NEW peer only
 	if ( !p )
@@ -69,6 +69,7 @@ peer_t	*FWD_peer_new(const char *remote_host, int remote_port, struct sockaddr_i
 	p->s		= ( new_peer ) ? s : p->s; // reuse socket in case of reusing
 	p->from		= *from;
 	p->to		= to;
+	p->listener_socket = listener_socket;
 	p->ps		= ( !new_peer && proto == pr_q3 ) ? p->ps : ps_challenge; // do not reset state for q3 in case of peer reusing
 	p->qport	= qport;
 	p->proto	= proto;
@@ -181,19 +182,85 @@ static void FWD_check_drop(void)
 	}
 }
 
+static void FWD_read_listener(int listener_socket)
+{
+	qbool connectionless;
+	int cnt;
+	peer_t *p;
+
+	for (;;)
+	{
+		if (!NET_GetPacket(listener_socket, &net_message))
+			break;
+
+		// check for bans.
+		if (SV_IsBanned(&net_from))
+			continue;
+
+		if (net_message.cursize == 1 && net_message.data[0] == A2A_ACK)
+		{
+			QRY_SV_PingReply();
+			continue;
+		}
+
+		MSG_BeginReading();
+		connectionless = (MSG_ReadLong() == -1);
+
+		if (connectionless)
+		{
+			if (MSG_BadRead())
+				continue;
+
+			if (!SV_ConnectionlessPacket())
+				continue; // seems we do not need forward it
+		}
+
+		p = FWD_peer_by_addr(&net_from, listener_socket);
+		if (!p)
+			continue;
+
+		// forward data to the server/proxy
+		if (p->ps >= ps_connected)
+		{
+			cnt = 1; // one packet by default
+
+			// check for "drop" aka client disconnect,
+			// first 10 bytes for NON connectionless packet is netchan related shit in QW
+			if (p->proto == pr_qw && !connectionless && net_message.cursize > 10 && net_message.data[10] == clc_stringcmd)
+			{
+				if (!strcmp((char*)net_message.data + 10 + 1, "drop"))
+				{
+					p->ps = ps_drop; // drop peer ASAP
+					cnt = 3; // send few packets due to possibile packet lost
+				}
+			}
+
+			for ( ; cnt > 0; cnt--)
+				NET_SendPacket(p->s, net_message.cursize, net_message.data, &p->to);
+		}
+
+		time(&p->last);
+	}
+}
+
 static void FWD_network_update(void)
 {
 	fd_set rfds;
 	struct timeval tv;
 	int retval;
-	int i1;
+	int i, i1;
 	peer_t *p;
 
 	FD_ZERO(&rfds);
 
-	// select on main server socket
-	FD_SET(net_socket, &rfds);
-	i1 = net_socket + 1;
+	// select on all server sockets
+	i1 = 0;
+	for (i = 0; i < net_listener_count; i++)
+	{
+		FD_SET(net_listeners[i].socket, &rfds);
+		if (net_listeners[i].socket >= i1)
+			i1 = net_listeners[i].socket + 1;
+	}
 
 	for (p = peers; p; p = p->next)
 	{
@@ -239,76 +306,11 @@ retry:
 	if (retval <= 0)
 		return;
 
-	// if we have input packet on main server/proxy socket, then read it
-	if(FD_ISSET(net_socket, &rfds))
+	// read packets from every configured server/proxy socket
+	for (i = 0; i < net_listener_count; i++)
 	{
-		qbool connectionless;
-		int cnt;
-
-		// read it
-		for(;;)
-		{
-			if (!NET_GetPacket(net_socket, &net_message))
-				break;
-
-			// check for bans.
-			if (SV_IsBanned(&net_from))
-				continue;
-
-			if (net_message.cursize == 1 && net_message.data[0] == A2A_ACK)
-			{
-				QRY_SV_PingReply();
-
-				continue;
-			}
-
-			MSG_BeginReading();
-			connectionless = (MSG_ReadLong() == -1);
-
-			if (connectionless)
-			{
-				if (MSG_BadRead())
-					continue;
-
-				if (!SV_ConnectionlessPacket())
-					continue; // seems we do not need forward it
-			}
-
-			// search in peers
-			for (p = peers; p; p = p->next)
-			{
-				// we have this peer already, so forward/send packet to remote server
-				if (NET_CompareAddress(&p->from, &net_from))
-					break;
-			}
-
-			// peer was not found
-			if (!p)
-				continue;
-
-			// forward data to the server/proxy
-			if (p->ps >= ps_connected)
-			{
-				cnt = 1; // one packet by default
-
-				// check for "drop" aka client disconnect,
-				// first 10 bytes for NON connectionless packet is netchan related shit in QW
-				if (p->proto == pr_qw && !connectionless && net_message.cursize > 10 && net_message.data[10] == clc_stringcmd)
-				{
-					if (!strcmp((char*)net_message.data + 10 + 1, "drop"))
-					{
-//						Sys_Printf("peer drop detected\n");
-						p->ps = ps_drop; // drop peer ASAP
-						cnt = 3; // send few packets due to possibile packet lost
-					}
-				}
-
-				for ( ; cnt > 0; cnt--)
-					NET_SendPacket(p->s, net_message.cursize, net_message.data, &p->to);
-			}
-
-			time(&p->last);
-		}
+		if (FD_ISSET(net_listeners[i].socket, &rfds))
+			FWD_read_listener(net_listeners[i].socket);
 	}
 
 	// now lets check peers sockets, perhaps we have input packets too
@@ -339,12 +341,12 @@ retry:
 					if (!CL_ConnectionlessPacket(p))
 						continue; // seems we do not need forward it
 
-					NET_SendPacket(net_socket, net_message.cursize, net_message.data, &p->from);
+					NET_SendPacket(p->listener_socket, net_message.cursize, net_message.data, &p->from);
 					continue;
 				}
 
 				if (p->ps >= ps_connected)
-					NET_SendPacket(net_socket, net_message.cursize, net_message.data, &p->from);
+					NET_SendPacket(p->listener_socket, net_message.cursize, net_message.data, &p->from);
 
 // qqshka: commented out
 //				time(&p->last);
