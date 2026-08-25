@@ -285,6 +285,19 @@ static void SVC_DirectConnect (void)
 
 	// check prx setinfo key
 	Info_ValueForKey(userinfo, QWFWD_PRX_KEY, prx, sizeof(prx));
+	if (prx[0] && !allow_client_prx->integer)
+	{
+		if (proto == pr_qw)
+		{
+			Netchan_OutOfBandPrint(net_from_socket, &net_from, "%c\nClient " QWFWD_PRX_KEY " userinfo key is not allowed\n", A2C_PRINT);
+		}
+		else
+		{
+			Netchan_OutOfBandPrint(net_from_socket, &net_from, "print\nClient " QWFWD_PRX_KEY " userinfo key is not allowed\n");
+		}
+		return;
+	}
+
 	if (!prx[0])
 	{
 		listener_port = NET_GetListenerPort(net_from_socket);

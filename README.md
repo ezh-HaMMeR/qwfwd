@@ -28,6 +28,7 @@ the port on which the client connected:
 set net_ip 188.120.226.217
 set net_ports "27500 27501"
 set default_server qwtf.net
+set allow_client_prx 0
 ```
 
 This configuration creates the following routes through QWFWD:
@@ -49,9 +50,15 @@ ports and ranges such as `27500-27510`.
 
 The existing `net_port` setting remains supported when `net_ports` is empty.
 An explicit port in `default_server`, for example `qwtf.net:27500`, is used for
-every listening port without a map override. An explicit client `prx` value
-continues to take precedence. When neither `default_server` nor a matching map
-entry is configured, the existing `prx userinfo key is not set` error is returned.
+every listening port without a map override.
+
+`allow_client_prx` defaults to `1`, preserving the existing behavior where an
+explicit client `prx` value takes precedence. Set it to `0` on a public
+default-server proxy to reject client-selected destinations and only allow
+routes configured through `default_server` and `default_server_map`.
+
+When neither `default_server` nor a matching map entry is configured, the
+existing `prx userinfo key is not set` error is returned.
 
 ## Building binaries
 

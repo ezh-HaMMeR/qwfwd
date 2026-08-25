@@ -21,6 +21,7 @@ cvar_t *city;
 cvar_t *coords;
 cvar_t *default_server;
 cvar_t *default_server_map;
+cvar_t *allow_client_prx;
 
 proxy_static_t ps;
 
@@ -136,6 +137,7 @@ DWORD WINAPI FWD_proc(void *lpParameter)
 
 	default_server	= Cvar_Get("default_server", "", 0);
 	default_server_map = Cvar_Get("default_server_map", "", 0);
+	allow_client_prx = Cvar_Get("allow_client_prx", "1", 0);
 
 	// register basic commands
 	Cmd_AddCommand("quit", Cmd_Quit_f);
