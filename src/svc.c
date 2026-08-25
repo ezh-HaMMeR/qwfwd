@@ -77,10 +77,11 @@ static void SVC_GetChallenge ( protocol_t proto )
 	oldest = 0;
 	oldestTime = 0x7fffffff;
 
-	// see if we already have a challenge for this ip
+	// see if we already have a challenge for this ip on this listener
 	for (i = 0 ; i < MAX_CHALLENGES; i++)
 	{
-		if (NET_CompareAddress(&net_from, &challenges[i].adr))
+		if (challenges[i].listener_socket == net_from_socket &&
+			NET_CompareAddress(&net_from, &challenges[i].adr))
 			break;
 
 		if (challenges[i].time < oldestTime)
